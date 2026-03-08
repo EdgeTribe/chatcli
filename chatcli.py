@@ -4,6 +4,7 @@
 import asyncio
 import json
 import os
+import shutil
 import sys
 import threading
 from contextlib import AsyncExitStack
@@ -21,6 +22,8 @@ SYSTEM_PROMPT = os.environ.get("CHAT_SYSTEM_PROMPT", "You are a helpful assistan
 # MCP servers: JSON object mapping name -> SSE URL
 # e.g. '{"mytools": "http://localhost:3000/sse"}'
 MCP_SERVERS_JSON = os.environ.get("CHAT_MCP_SERVERS", "{}")
+
+AI_PROMPT = "{._.} AI:\\> "
 
 
 def blinking_cursor(stop_event: threading.Event):
@@ -209,10 +212,19 @@ async def async_main():
     if SYSTEM_PROMPT:
         messages.append({"role": "system", "content": SYSTEM_PROMPT})
 
+    has_history = False
     try:
         while True:
             try:
-                user_input = (await asyncio.to_thread(input, "\n────────────────────────────────────────\n\nYOU:\\>")).strip()
+                if has_history:
+                    cols = shutil.get_terminal_size().columns
+                    print(f"\n{'─' * cols}\n")
+                user_input = (await asyncio.to_thread(input, "(o_o) YOU:\\> ")).strip()
+                if has_history:
+                    # Erase separator: up 3 lines (input, blank, separator),
+                    # clear to end of screen, reprint input with spacing
+                    sys.stdout.write("\033[3A\033[0J")
+                    print(f"\nYOU:\\>{user_input}")
             except (EOFError, KeyboardInterrupt):
                 print("\nBye!")
                 break
@@ -243,13 +255,14 @@ async def async_main():
             first_turn = True
             while True:
                 if first_turn:
-                    print("AI:\\>", end="", flush=True)
+                    print(AI_PROMPT, end="", flush=True)
                 first_turn = False
                 result = await stream_chat(messages, mcp.tools or None)
 
                 if not result["tool_calls"]:
                     if result["content"]:
                         messages.append({"role": "assistant", "content": result["content"]})
+                    has_history = True
                     break
 
                 # Record the assistant message with tool calls
@@ -291,7 +304,7 @@ async def async_main():
                 print("\033[0m", end="")  # reset
                 print()
                 print()
-                print("AI:\\>", end="", flush=True)
+                print(AI_PROMPT, end="", flush=True)
     finally:
         await mcp.close()
 
