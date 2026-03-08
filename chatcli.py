@@ -4,6 +4,7 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -24,6 +25,9 @@ SYSTEM_PROMPT = os.environ.get("CHAT_SYSTEM_PROMPT", "You are a helpful assistan
 MCP_SERVERS_JSON = os.environ.get("CHAT_MCP_SERVERS", "{}")
 
 AI_PROMPT = "{._.} AI:\\> "
+
+# Matches ANSI escape sequences: CSI (ESC[), OSC (ESC]), and other ESC-initiated codes
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*(?:\x07|\x1b\\)|[()][A-B0-2]|[=>NOM78HD])")
 
 
 def blinking_cursor(stop_event: threading.Event):
@@ -158,8 +162,9 @@ async def stream_chat(messages: list[dict], tools: list[dict] | None = None) -> 
                         if not cursor_stop.is_set():
                             cursor_stop.set()
                             cursor_thread.join()
-                        print(content, end="", flush=True)
-                        full_content += content
+                        sanitized = _ANSI_RE.sub("", content)
+                        print(sanitized, end="", flush=True)
+                        full_content += sanitized
 
                     # Handle tool calls (streamed incrementally)
                     for tc in delta.get("tool_calls", []):
@@ -288,7 +293,7 @@ async def async_main():
                         args_preview = args_preview[:77] + "..."
                     print(f"    │ call  {fn_name}({args_preview})")
 
-                    tool_result = await mcp.call_tool(fn_name, fn_args)
+                    tool_result = _ANSI_RE.sub("", await mcp.call_tool(fn_name, fn_args))
 
                     result_preview = tool_result.replace("\n", " ")[:160]
                     if len(tool_result) > 160:
