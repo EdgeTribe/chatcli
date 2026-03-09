@@ -12,7 +12,7 @@ from contextlib import AsyncExitStack
 
 import httpx
 from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 # Configuration via environment variables
 API_KEY = os.environ.get("CHAT_API_KEY", "")
@@ -23,6 +23,10 @@ SYSTEM_PROMPT = os.environ.get("CHAT_SYSTEM_PROMPT", "You are a helpful assistan
 # MCP servers: JSON object mapping name -> SSE URL
 # e.g. '{"mytools": "http://localhost:3000/sse"}'
 MCP_SERVERS_JSON = os.environ.get("CHAT_MCP_SERVERS", "{}")
+
+# MCP authentication: JSON object mapping name -> auth header value
+# e.g. '{"mytools": "Bearer token123"}'
+MCP_AUTH_JSON = os.environ.get("CHAT_MCP_AUTH", "{}")
 
 # Matches ANSI escape sequences: CSI (ESC[), OSC (ESC]), and other ESC-initiated codes
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*(?:\x07|\x1b\\)|[()][A-B0-2]|[=>NOM78HD])")
@@ -72,12 +76,16 @@ class MCPManager:
         self._tools: list[dict] = []  # OpenAI-format tool definitions
         self._exit_stack = AsyncExitStack()
 
-    async def connect(self, servers: dict[str, str]):
+    async def connect(self, servers: dict[str, str], auth_headers: dict[str, str] | None = None):
         """Connect to all configured MCP servers."""
+        auth_headers = auth_headers or {}
         for name, url in servers.items():
             try:
-                read_stream, write_stream = await self._exit_stack.enter_async_context(
-                    sse_client(url)
+                headers = {}
+                if name in auth_headers:
+                    headers["Authorization"] = auth_headers[name]
+                read_stream, write_stream, _ = await self._exit_stack.enter_async_context(
+                    streamablehttp_client(url, headers=headers if headers else None, timeout=10)
                 )
                 session = await self._exit_stack.enter_async_context(
                     ClientSession(read_stream, write_stream)
@@ -97,8 +105,10 @@ class MCPManager:
                     })
                     self._tool_to_server[tool.name] = name
                 print(f"  Connected to '{name}': {len(result.tools)} tool(s)")
+            except asyncio.TimeoutError:
+                print(f"  Failed to connect to '{name}' ({url}): Connection timeout")
             except Exception as e:
-                print(f"  Failed to connect to '{name}' ({url}): {e}")
+                print(f"  Failed to connect to '{name}' ({url}): {type(e).__name__}: {e}")
 
     async def call_tool(self, name: str, arguments: dict) -> str:
         """Call an MCP tool and return the result as a string."""
@@ -216,12 +226,17 @@ async def stream_chat(messages: list[dict], tools: list[dict] | None = None) -> 
 
 
 async def async_main():
+    # Clear terminal on startup using ANSI escape sequences
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
+
     mcp = MCPManager()
     servers = json.loads(MCP_SERVERS_JSON)
+    auth_headers = json.loads(MCP_AUTH_JSON)
 
     if servers:
         print("Connecting to MCP servers...")
-        await mcp.connect(servers)
+        await mcp.connect(servers, auth_headers)
 
     # Build title lines and find max width
     title_lines = [
