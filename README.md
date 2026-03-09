@@ -28,7 +28,18 @@ python3 chatcli.py
 
 ### Configuration
 
-All configuration is done via environment variables:
+All configuration is done via environment variables. A template file `.source.env.example` is provided with all available variables and example values.
+
+To get started, copy the template, edit it with your values, and source it:
+
+```bash
+cp .source.env.example .source.env
+# Edit .source.env with your preferred settings
+source .source.env
+python3 chatcli.py
+```
+
+The `.source.env` file is ignored by git, so your credentials stay local.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -37,10 +48,13 @@ All configuration is done via environment variables:
 | `CHAT_MODEL` | `llama3` | Model name to use |
 | `CHAT_SYSTEM_PROMPT` | `You are a helpful assistant.` | System prompt |
 | `CHAT_MCP_SERVERS` | `{}` | JSON object mapping server names to SSE URLs |
+| `CHAT_MCP_AUTH` | `{}` | JSON object mapping server names to auth header values (e.g. Bearer tokens) |
+| `CHAT_AI_NAME` | `AI` | Display name for the assistant (max 20 chars, sanitized) |
+| `CHAT_USER_NAME` | `YOU` | Display name for the user (max 20 chars, sanitized) |
 
 ### Examples
 
-Chat with a local Ollama instance (default):
+Chat with a local Ollama instance (default settings, no env file needed):
 
 ```bash
 python3 chatcli.py
