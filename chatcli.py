@@ -24,10 +24,25 @@ SYSTEM_PROMPT = os.environ.get("CHAT_SYSTEM_PROMPT", "You are a helpful assistan
 # e.g. '{"mytools": "http://localhost:3000/sse"}'
 MCP_SERVERS_JSON = os.environ.get("CHAT_MCP_SERVERS", "{}")
 
-AI_PROMPT = "{._.} AI:\\> "
-
 # Matches ANSI escape sequences: CSI (ESC[), OSC (ESC]), and other ESC-initiated codes
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\][^\x07]*(?:\x07|\x1b\\)|[()][A-B0-2]|[=>NOM78HD])")
+
+# Sanitize AI name: strip ANSI codes, control characters, limit length
+def _sanitize_name(name: str) -> str:
+    """Sanitize AI name to prevent injection attacks."""
+    # Strip ANSI escape sequences
+    name = _ANSI_RE.sub("", name)
+    # Remove control characters (except space and printable chars)
+    name = "".join(c for c in name if c.isprintable())
+    # Limit length and strip whitespace
+    name = name.strip()[:20]
+    return name if name else "AI"
+
+AI_NAME = _sanitize_name(os.environ.get("CHAT_AI_NAME", "AI"))
+AI_PROMPT = f"{{._.}} {AI_NAME}:\\> "
+
+USER_NAME = _sanitize_name(os.environ.get("CHAT_USER_NAME", "YOU"))
+USER_PROMPT = f"(o_o) {USER_NAME}:\\> "
 
 
 def blinking_cursor(stop_event: threading.Event):
@@ -208,10 +223,19 @@ async def async_main():
         print("Connecting to MCP servers...")
         await mcp.connect(servers)
 
-    print(f"Chat CLI  |  model: {MODEL}  |  endpoint: {BASE_URL}")
+    # Build title lines and find max width
+    title_lines = [
+        f"Chat CLI  |  model: {MODEL}  |  endpoint: {BASE_URL}",
+        "Type /quit to exit, /clear to reset conversation.",
+    ]
     if mcp.tools:
-        print(f"Tools: {', '.join(t['function']['name'] for t in mcp.tools)}")
-    print("Type /quit to exit, /clear to reset conversation.\n")
+        title_lines.insert(1, f"Tools: {', '.join(t['function']['name'] for t in mcp.tools)}")
+
+    box_width = max(len(line) for line in title_lines)
+    print(f"\n┌{'─' * box_width}┐")
+    for line in title_lines:
+        print(f"│{line.ljust(box_width)}│")
+    print(f"└{'─' * box_width}┘\n")
 
     messages: list[dict] = []
     if SYSTEM_PROMPT:
@@ -223,13 +247,13 @@ async def async_main():
             try:
                 if has_history:
                     cols = shutil.get_terminal_size().columns
-                    print(f"\n{'─' * cols}\n")
-                user_input = (await asyncio.to_thread(input, "(o_o) YOU:\\> ")).strip()
+                    print(f"\n\n{'─' * cols}\n")
+                user_input = (await asyncio.to_thread(input, USER_PROMPT)).strip()
                 if has_history:
-                    # Erase separator: up 3 lines (input, blank, separator),
+                    # Erase separator: up 4 lines (input, blank, separator, blank),
                     # clear to end of screen, reprint input with spacing
-                    sys.stdout.write("\033[3A\033[0J")
-                    print(f"\nYOU:\\>{user_input}")
+                    sys.stdout.write("\033[4A\033[0J")
+                    print(f"\n\n{USER_NAME}:\\> {user_input}")
             except (EOFError, KeyboardInterrupt):
                 print("\nBye!")
                 break
@@ -260,6 +284,9 @@ async def async_main():
             first_turn = True
             while True:
                 if first_turn:
+                    if has_history:
+                        cols = shutil.get_terminal_size().columns
+                        print(f"\n\n{'─' * cols}\n")
                     print(AI_PROMPT, end="", flush=True)
                 first_turn = False
                 result = await stream_chat(messages, mcp.tools or None)
