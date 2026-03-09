@@ -157,62 +157,74 @@ async def stream_chat(messages: list[dict], tools: list[dict] | None = None) -> 
     cursor_thread = threading.Thread(target=blinking_cursor, args=(cursor_stop,), daemon=True)
     cursor_thread.start()
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        async with client.stream(
-            "POST",
-            f"{BASE_URL}/chat/completions",
-            headers=headers,
-            json=payload,
-        ) as response:
-            if response.status_code != 200:
-                cursor_stop.set()
-                cursor_thread.join()
-                body = (await response.aread()).decode()
-                print(f"\n[Error {response.status_code}] {body}")
-                return {"content": "", "tool_calls": []}
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream(
+                "POST",
+                f"{BASE_URL}/chat/completions",
+                headers=headers,
+                json=payload,
+            ) as response:
+                if response.status_code != 200:
+                    cursor_stop.set()
+                    cursor_thread.join()
+                    body = (await response.aread()).decode()
+                    print(f"\n[Error {response.status_code}] {body}")
+                    return {"content": "", "tool_calls": []}
 
-            async for line in response.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data.strip() == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                    delta = chunk["choices"][0].get("delta", {})
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0].get("delta", {})
 
-                    # Handle text content
-                    content = delta.get("content", "")
-                    if content:
-                        if not cursor_stop.is_set():
-                            cursor_stop.set()
-                            cursor_thread.join()
-                        sanitized = _ANSI_RE.sub("", content)
-                        print(sanitized, end="", flush=True)
-                        full_content += sanitized
-
-                    # Handle tool calls (streamed incrementally)
-                    for tc in delta.get("tool_calls", []):
-                        idx = tc["index"]
-                        if idx not in tool_calls_by_index:
+                        # Handle text content
+                        content = delta.get("content", "")
+                        if content:
                             if not cursor_stop.is_set():
                                 cursor_stop.set()
                                 cursor_thread.join()
-                            tool_calls_by_index[idx] = {
-                                "id": tc.get("id", ""),
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        entry = tool_calls_by_index[idx]
-                        if tc.get("id"):
-                            entry["id"] = tc["id"]
-                        fn = tc.get("function", {})
-                        if fn.get("name"):
-                            entry["function"]["name"] += fn["name"]
-                        if fn.get("arguments"):
-                            entry["function"]["arguments"] += fn["arguments"]
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    continue
+                            sanitized = _ANSI_RE.sub("", content)
+                            print(sanitized, end="", flush=True)
+                            full_content += sanitized
+
+                        # Handle tool calls (streamed incrementally)
+                        for tc in delta.get("tool_calls", []):
+                            idx = tc["index"]
+                            if idx not in tool_calls_by_index:
+                                if not cursor_stop.is_set():
+                                    cursor_stop.set()
+                                    cursor_thread.join()
+                                tool_calls_by_index[idx] = {
+                                    "id": tc.get("id", ""),
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            entry = tool_calls_by_index[idx]
+                            if tc.get("id"):
+                                entry["id"] = tc["id"]
+                            fn = tc.get("function", {})
+                            if fn.get("name"):
+                                entry["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                entry["function"]["arguments"] += fn["arguments"]
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+    except httpx.ConnectError:
+        cursor_stop.set()
+        cursor_thread.join()
+        print(f"\n[Connection failed] Could not connect to {BASE_URL}")
+        print("Check that the server is running and CHAT_BASE_URL is correct.")
+        return {"content": "", "tool_calls": []}
+    except httpx.ConnectTimeout:
+        cursor_stop.set()
+        cursor_thread.join()
+        print(f"\n[Connection timeout] Timed out connecting to {BASE_URL}")
+        return {"content": "", "tool_calls": []}
 
     cursor_stop.set()
     cursor_thread.join()
